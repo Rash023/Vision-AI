@@ -1,5 +1,4 @@
 "use client";
-export const fetchCache = "force-no-store";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,67 +9,19 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
-import { CachedResponse, ChatMessage, DatabaseCredentials } from "@/types";
+import { ChatMessage } from "@/types";
 import { zodResolver } from "@hookform/resolvers/zod";
-import axios, { AxiosResponse } from "axios";
-import React, { FormEvent, useCallback, useState } from "react";
+import axios from "axios";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import Link from "next/link";
-import Image from "next/image";
-import { AiOutlineEdit } from "react-icons/ai";
-import { MdDone } from "react-icons/md";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { DownloadIcon, EllipsisVertical, Download } from "lucide-react";
-import { cache, checkKey } from "@/lib/actions/redis.action";
-import {
-  AI_MESSAGE_ROLE_SET,
-  containsLink,
-  generate_check_can_execute_prompt,
-  generate_database_visualisation_prompt,
-  getModel,
-  INVALID_RESPONSE_SET,
-} from "@/lib/utils";
-import cookie from "js-cookie";
-import { addMessage, createChat, renameChat } from "@/lib/actions/chat.action";
-import { models } from "mongoose";
 
 export default function Component() {
   const { toast } = useToast();
-
-  const [databaseCredentials, setDatabaseCredentials] =
-    useState<DatabaseCredentials | null>(null);
-  const [schemaInfo, setSchemaInfo] = useState<string>("");
-  const [welcome, setWelcome] = useState<Boolean>(false);
-  const [inputText, setInputText] = useState<string>("");
-  const [isOpen, setIsOpen] = useState(false);
-  const [name, setName] = useState<string>("");
-  const [chatID, setChatID] = useState<string>("");
-  const [isEdit, setIsEdit] = useState<Boolean>(false);
-  const [title,setTitle]=useState<string>("")
-  const [chats, setChats] = useState<ChatMessage[]>([
-    {
-      msg: "Hi there! How can I help You today?",
-      role: "AI",
-    },
-  ]);
-
-  /* FORM SCHEMA INITIALIZATION */
   const formSchema = z.object({
     Host: z.string().min(2, {
       message: "Hostname must be at least 2 characters.",
@@ -88,8 +39,15 @@ export default function Component() {
       message: "Password must be at least 6 characters.",
     }),
   });
+  const [welcome, setwelcome] = useState<Boolean>(false);
+  const [inputText, setInputText] = useState<string>("");
+  const [chats, setchats] = useState<ChatMessage[]>([
+    {
+      msg: "Hi there! How can i help You today?",
+      role: "AI",
+    },
+  ]);
 
-  /* ZOD FORM */
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -100,141 +58,7 @@ export default function Component() {
       Password: "",
     },
   });
-
-  /* GEMINI */
-  const model = getModel();
-
-  /* FORMAT GEMINI RESPONSE */
-  const formatMessage = (message: string): JSX.Element | JSX.Element[] => {
-    const lines = message.split("\n");
-    let isTable = false;
-    const tableData: string[][] = [];
-    lines.forEach((line) => {
-      const columns = line
-        .split("|")
-        .map((col) => col.trim())
-        .filter(Boolean);
-      if (columns.length > 1) {
-        isTable = true;
-        tableData.push(columns);
-      }
-    });
-    if (isTable && tableData.length > 1) {
-      tableData.splice(1, 1);
-      const headers = tableData[0];
-      const rows = tableData.slice(1);
-      return (
-        <table
-          style={{ width: "100%", borderCollapse: "collapse", margin: "1em 0" }}
-        >
-          <thead>
-            <tr>
-              {headers.map((header, index) => (
-                <th
-                  key={index}
-                  style={{
-                    border: "1px solid #ddd",
-                    padding: "8px",
-                    textAlign: "left",
-                    backgroundColor: "#f2f2f2",
-                    borderBottom: "2px solid black",
-                  }}
-                >
-                  {header.charAt(0).toUpperCase() + header.slice(1)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    style={{
-                      border: "1px solid #ddd",
-                      padding: "8px",
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-    }
-    return lines.map((part, index) => {
-      const isList = /^\d+\./.test(part.trim());
-      const formattedPart = part
-        .split(/(\*\*.*?\*\*|mailto:[^\s]+)/g)
-        .map((subPart, subIndex) => {
-          if (subPart.startsWith("**") && subPart.endsWith("**")) {
-            return <b key={subIndex}>{subPart.slice(2, -2)}</b>;
-          } else if (subPart.startsWith("mailto:")) {
-            return (
-              <a key={subIndex} href={subPart} style={{ color: "blue" }}>
-                {subPart}
-              </a>
-            );
-          }
-          return subPart;
-        });
-      return (
-        <div key={index} style={{ marginBottom: isList ? "0.5em" : "0" }}>
-          {formattedPart}
-        </div>
-      );
-    });
-  };
-
-  /* DOWNLOAD HANDLER FOR IMAGE IN VISUALISATION RESPONSE */
-  const handleDownload = useCallback(async (url: string): Promise<void> => {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error("Error fetching image.");
-      }
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "Image.png";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch (error) {
-      console.error("Error downloading the image -", error);
-    }
-  }, []);
-
-  /* DOWNLOAD HANDLER FOR DB REPORT */
-  const downloadHandler = useCallback(async () => {
-    const details = { ...databaseCredentials, schemaDescription: schemaInfo };
-    try {
-      const response: AxiosResponse<Blob> = await axios.post(
-        "http://localhost:4000/image/report",
-        details,
-        {
-          headers: {
-            "Content-Type": "application/json",
-          },
-          responseType: "blob",
-        }
-      );
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", "Report.pdf");
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (error) {
-      console.error(error);
-    }
-  }, [databaseCredentials, schemaInfo]);
-
-  /* DB CONNECTION HANDLER */
+  
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     const data = {
       Host: values.Host,
@@ -243,7 +67,6 @@ export default function Component() {
       User: values.User,
       Password: values.Password,
     };
-    setDatabaseCredentials(data);
 
     try {
       const response = await axios.post("http://127.0.0.1:5000/connect", data, {
@@ -251,11 +74,7 @@ export default function Component() {
           "Content-Type": "application/json",
         },
       });
-      if (response.data.status) {
-        const schema_description = response.data.schema_description;
-        const db = response.data.db;
-        setSchemaInfo(schema_description);
-        cookie.set("db", db, { secure: true });
+      if (response.data.status === "success") {
         toast({
           variant: "success",
           title: "Connection Successful",
@@ -280,202 +99,49 @@ export default function Component() {
     }
   };
 
-  /*ADD MESSAGE */
-  const addNewMessage = async (chat: ChatMessage) => {
-    if (!chatID) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Please login.",
-        action: <ToastAction altText="Try again">Try again</ToastAction>,
-      });
-      return;
-    }
-    try {
-      const response = JSON.parse(await addMessage({ ...chat, id: chatID }));
-      if (!response.success) {
-        toast({
-          variant: "destructive",
-          title: "Uh oh! Something went wrong.",
-          description: "Please Try Again.",
-          action: <ToastAction altText="Try again">Try again</ToastAction>,
-        });
-      }
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Uh oh! Something went wrong.",
-        description: error.message || "An unexpected error occurred.",
-        action: <ToastAction altText="Try again">Try again</ToastAction>,
-      });
-    }
-  };
-
-  /* HANDLER FUNCTION TO CHECK WHETHER CAN EXECUTE PROMPT */
-  const can_execute_prompt = async (prompt: string) => {
-    const result = await model.generateContent(prompt);
-    const response = result.response.text();
-    if (INVALID_RESPONSE_SET.has(response.trim().toUpperCase())) {
-      return false;
-    }
-    return true;
-  };
-
-  /* CHAT MESSAGE HANDLER */
-  const handleSendMessage = async (
-    e: FormEvent<HTMLFormElement>
-  ): Promise<void> => {
+  const handleSendMessage = async (e: any) => {
     e.preventDefault();
-    const db_uri = cookie.get("db");
-    if (!db_uri) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Please provide database credentials first",
-        action: <ToastAction altText="Try again">Try again</ToastAction>,
-      });
-      setInputText("");
-      return;
-    }
     if (inputText.trim()) {
-      const userPrompt = inputText;
-      const role = cookie.get("role") as string;
-      const check_can_execute_prompt = generate_check_can_execute_prompt(
-        userPrompt,
-        role
-      );
-      const can_execute_response = can_execute_prompt(check_can_execute_prompt);
-      if (!can_execute_response) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "You are not allowed to execute this action.",
-          action: <ToastAction altText="Try again">Try again</ToastAction>,
-        });
-        setInputText("");
-        return;
-      }
-      const userChat: ChatMessage = { msg: userPrompt, role: "User" };
-      setChats((prevChats) => [...prevChats, userChat]);
-      addNewMessage(userChat);
-      setInputText("");
+      setchats([...chats, { msg: inputText, role: "User" }]);
+
       try {
-        const cachedResponse: CachedResponse = await checkKey(
-          db_uri,
-          userPrompt
+        const response = await axios.post(
+          "http://127.0.0.1:5000/chat",
+          { message: inputText },
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
         );
-        let newChat: ChatMessage = { msg: "", role: "User" };
-        if (INVALID_RESPONSE_SET.has(cachedResponse)) {
-          const response = await axios.post(
-            "http://127.0.0.1:5000/chat",
-            { message: userPrompt, db: db_uri },
-            {
-              headers: {
-                "Content-Type": "application/json",
-              },
-            }
-          );
-          const llmResponse = response.data.response;
-          const prompt = generate_database_visualisation_prompt(llmResponse);
-          const result = await model.generateContent(prompt);
-          const quickchartResponse = result.response.text();
-          const hasLink = containsLink(quickchartResponse);
-          newChat = {
-            msg: response.data.response,
-            role: "AI",
-            link: hasLink ? quickchartResponse : null,
-          };
-          await cache(db_uri, userPrompt, newChat);
-        } else {
-          newChat = cachedResponse;
-        }
-        setChats((prevChats) => [...prevChats, newChat]);
-        addNewMessage(newChat);
+
+        setchats((prevChats) => [
+          ...prevChats,
+          { msg: response.data.response, role: "AI" },
+        ]);
       } catch (error) {
-        console.error(error);
+        console.error("Error", error);
       }
-    }
-  };
 
-  /* CREATE CHAT */
-  const createChatHandler = async () => {
-    try {
-      setName(title)
-      const response = await createChat(name);
-      const parsedResponse = JSON.parse(response as string);
-      if (parsedResponse.success) {
-        setChatID(parsedResponse.chat._id);
-        toast({
-          variant: "success",
-          title: "Chat Created",
-          description: "Let's Get Started!",
-        });
-        setWelcome(true);
-        setIsOpen(false);
-      } else {
-        toast({
-          variant: "destructive",
-          title: "Uh oh! Something went wrong.",
-          description: parsedResponse.message,
-          action: <ToastAction altText="Try again">Try again</ToastAction>,
-        });
-      }
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.message || "An unexpected error occurred.",
-        action: <ToastAction altText="Try again">Try again</ToastAction>,
-      });
-    }
-  };
-
-  /*EDIT CHAT NAME*/
-  const editChatName = async (e: React.MouseEvent) => {
-    e.preventDefault();
-
-    if (!name.trim()) {
-      toast({
-        variant: "destructive",
-        title: "Invalid Name",
-        description: "Please provide a valid name.",
-      });
-      return;
-    }
-
-    let response = JSON.parse(await renameChat({ id: chatID, name: name }));
-
-    if (response.success) {
-      toast({
-        variant: "success",
-        title: "Name Updated Successfully",
-        description: "Let's Get Started!",
-      });
-      setIsEdit(false);
-    } else {
-      toast({
-        variant: "destructive",
-        title: "Uh oh! Something went wrong.",
-        action: <ToastAction altText="Try again">Try again</ToastAction>,
-      });
+      setInputText("");
     }
   };
 
   return (
-    <div className="min-h-screen w-full bg-background text-foreground flex flex-col md:grid md:grid-cols-[280px_1fr]">
-      <div className="flex flex-col border-r bg-muted/40 p-4 md:border-r">
+    <div className="grid min-h-screen w-full grid-cols-[280px_1fr] bg-background text-foreground">
+      <div className="flex flex-col border-r bg-muted/40 p-4">
         <div className="flex items-center justify-between">
-          <Link href="/" prefetch={false}>
-            <h1 className="text-xl lg:text-left text-center font-semibold">
-              Vision AI
-            </h1>
-          </Link>
+          <h2 className="text-lg font-semibold">AI Assistant</h2>
+          <Button variant="ghost" size="icon">
+            <SettingsIcon className="h-5 w-5" />
+            <span className="sr-only">Settings</span>
+          </Button>
         </div>
 
         {/* DB CONNECT */}
         <div className="mt-4 flex-1 space-y-4 overflow-auto">
           <div>
-            <h3 className="text-sm font-medium text-muted-foreground ml-2">
+            <h3 className="text-sm font-medium text-muted-foreground">
               Database Credentials
             </h3>
             <Form {...form}>
@@ -555,60 +221,40 @@ export default function Component() {
               </form>
             </Form>
           </div>
-        </div>
-        <div className="mt-4 text-sm text-red-600 text-justify">
-          *Make sure you are authorized, as we store logs.
+          <Tabs defaultValue="database">
+            <TabsList className="ml">
+              <TabsTrigger value="csv">CSV</TabsTrigger>
+              <TabsTrigger value="database">Database</TabsTrigger>
+            </TabsList>
+            <TabsContent value="csv">
+              <div className="space-y-4">
+                <Button variant="outline" size="sm">
+                  <FileIcon className="mr-2 h-4 w-4" />
+                  Attach File
+                </Button>
+                <Button variant="outline" size="sm">
+                  <MicIcon className="mr-2 h-4 w-4" />
+                  Send Voice
+                </Button>
+              </div>
+            </TabsContent>
+            <TabsContent value="database">
+              <div className="space-y-4">
+                <Button variant="outline" size="sm">
+                  <MicIcon className="mr-2 h-4 w-4" />
+                  Send Voice
+                </Button>
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
 
       {/* WELCOME CHAT */}
-      <div className="flex flex-col h-screen overflow-hidden">
-        <div className="sticky top-0 z-10 border-b bg-background/50 p-4 backdrop-blur-md flex justify-between items-baseline">
-          <div className="flex items-center gap-x-3">
-            <div>
-              {!isEdit ? (
-                <h1 className="text-xl lg:text-left text-center font-semibold">
-                  {name}
-                </h1>
-              ) : (
-                <div className="flex items-center gap-x-3">
-                  <Input
-                    id="name"
-                    className=""
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                  />
-                  <MdDone
-                    className="text-gray-500 cursor-pointer"
-                    size={30}
-                    onClick={(e) => editChatName(e)}
-                  />
-                </div>
-              )}
-            </div>
-            {name && (
-              <AiOutlineEdit
-                className="text-gray-500 cursor-pointer"
-                size={30}
-                onClick={() => setIsEdit(true)}
-              />
-            )}
-          </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-full">
-                <EllipsisVertical className="w-4 h-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={downloadHandler}>
-                <DownloadIcon className="w-4 h-4 mr-2" />
-                Download Report
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+      <div className="flex flex-col">
+        <div className="sticky top-0 z-10 border-b bg-background/50 p-4 backdrop-blur-md">
+          <h1 className="text-xl font-semibold">Vision AI </h1>
         </div>
 
         {chats.length < 2 && !welcome && (
@@ -628,80 +274,39 @@ export default function Component() {
                 <Button
                   variant="outline"
                   className="bg-black text-white py-3 px-6 text-lg font-semibold"
-                  onClick={() => setIsOpen(true)}
+                  onClick={() => setwelcome(true)}
                 >
                   Get Started
                 </Button>
-                <Link href="/faq">
-                  <Button
-                    variant="outline"
-                    className="text-black hover:bg-black dark:text-white hover:text-white font-bold py-3 px-6 text-lg"
-                  >
-                    FAQ
-                  </Button>
-                </Link>
+                <Button
+                  variant="outline"
+                  className="text-black font-bold py-3 px-6 text-lg"
+                >
+                  FAQ
+                </Button>
               </div>
             </div>
           </div>
         )}
+
+        {/* Chats */}
         {welcome && (
-          <div className="flex-1 overflow-auto p-4">
+          <div className="flex-1 overflow-auto p-4 max-h-[calc(100vh-10rem)]">
+            {" "}
+            {/* Adjust height as needed */}
             <div className="flex flex-col gap-4">
               {chats.map((chat, index) => (
-                <div
-                  key={index}
-                  className={`flex items-start gap-4 ${
-                    AI_MESSAGE_ROLE_SET.has(chat.role) ? "" : "justify-end"
-                  } `}
-                >
+                <div key={index} className={`flex items-start gap-4 `}>
                   <Avatar className="h-8 w-8 shrink-0 border">
-                    <AvatarImage
-                      src={`${
-                        AI_MESSAGE_ROLE_SET.has(chat.role)
-                          ? "/AI.png"
-                          : "/Human.png"
-                      }`}
-                    />
+                    <AvatarImage src= {`${chat.role==="User"?"https://w1.pngwing.com/pngs/743/500/png-transparent-circle-silhouette-logo-user-user-profile-green-facial-expression-nose-cartoon-thumbnail.png":"https://img.freepik.com/free-vector/graident-ai-robot-vectorart_78370-4114.jpg?size=338&ext=jpg&ga=GA1.1.2008272138.1721433600&semt=sph"}`}  />
                     <AvatarFallback>{chat.role}</AvatarFallback>
                   </Avatar>
                   <div className="max-w-[700px]">
+                    {" "}
+                    {/* Fixed width for message box */}
                     <div className="grid gap-1">
-                      <div
-                        className={`prose text-muted-foreground  bg-${
-                          AI_MESSAGE_ROLE_SET.has(chat.role)
-                            ? "muted"
-                            : "primary"
-                        }  p-2 rounded-md ${
-                          AI_MESSAGE_ROLE_SET.has(chat.role)
-                            ? ""
-                            : "text-primary-foreground"
-                        }`}
-                      >
-                        {AI_MESSAGE_ROLE_SET.has(chat.role) ? (
-                          <>
-                            <p>{formatMessage(chat.msg)}</p>
-                            {chat.link && (
-                              <div className="relative">
-                                <Image
-                                  src={chat.link}
-                                  alt="chart"
-                                  width={400}
-                                  height={400}
-                                />
-                                <button
-                                  onClick={() =>
-                                    handleDownload(chat.link as string)
-                                  }
-                                  className="absolute top-2 right-2 p-2 bg-white rounded-full shadow-lg"
-                                >
-                                  <Download size={16} />
-                                </button>
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          chat.msg
-                        )}
+                      <div className="prose text-muted-foreground bg-gray-200 p-2 rounded-md">
+                        <p>{chat.msg}</p>
                       </div>
                     </div>
                   </div>
@@ -712,10 +317,7 @@ export default function Component() {
         )}
 
         {welcome && (
-          <form
-            onSubmit={handleSendMessage}
-            className="sticky bottom-0 z-10 border-t bg-background p-2"
-          >
+          <div className="sticky bottom-0 z-10 border-t bg-background/50 p-4 backdrop-blur-md">
             <div className="relative">
               <Textarea
                 placeholder="Type your message..."
@@ -727,38 +329,63 @@ export default function Component() {
                 type="submit"
                 size="icon"
                 className="absolute right-3 top-3"
+                onClick={(e) => handleSendMessage(e)}
               >
                 <SendIcon className="h-4 w-4" />
                 <span className="sr-only">Send</span>
               </Button>
-            </div>
-          </form>
-        )}
-      </div>
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-xs sm:max-w-md sm:px-10 mx-auto">
-          <DialogHeader>
-            <DialogTitle>Name</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="flex items-center gap-4 w-full">
-              <Input
-                id="name"
-                className="flex-1"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-              />
+              <div className="absolute right-12 top-3">
+                <Button variant="ghost" size="icon">
+                  <FileIcon className="h-4 w-4" />
+                  <span className="sr-only">Attach File</span>
+                </Button>
+              </div>
             </div>
           </div>
-          <DialogFooter>
-            <Button type="button" onClick={createChatHandler}>
-              Create
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        )}
+      </div>
     </div>
+  );
+}
+
+function FileIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    </svg>
+  );
+}
+
+function MicIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" x2="12" y1="19" y2="22" />
+    </svg>
   );
 }
 
@@ -778,6 +405,26 @@ function SendIcon(props: React.SVGProps<SVGSVGElement>) {
     >
       <path d="m22 2-7 20-4-9-9-4Z" />
       <path d="M22 2 11 13" />
+    </svg>
+  );
+}
+
+function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
